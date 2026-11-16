@@ -1,0 +1,7 @@
+dist/
+web-flasher/*.bin
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.venv/
+memory.flash

@@ -1,0 +1,5 @@
+dist
+**/build
+**/third-party
+tools
+web-flasher

@@ -1,0 +1,116 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # s3/s2: native USB security key. esp32/c3/c6: serial transport (no USB OTG).
+        target: [esp32s3, esp32s2, esp32, esp32c3, esp32c6]
+    container: espressif/idf:v5.5.4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - name: Build ${{ matrix.target }}
+        shell: bash
+        env:
+          # Set these repository variables once you own a VID/PID (https://pid.codes).
+          USB_VID: ${{ vars.USB_VID }}
+          USB_PID: ${{ vars.USB_PID }}
+        run: |
+          . $IDF_PATH/export.sh
+          SRC_ROOT="$GITHUB_WORKSPACE" bash firmware/build.sh ${{ matrix.target }} "$GITHUB_WORKSPACE/dist"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: passkey_${{ matrix.target }}
+          path: dist/passkey_${{ matrix.target }}.bin
+
+  cli-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Unit tests
+        run: |
+          pip install -e "tools/passkey-cli[test]"
+          pytest -q tools/passkey-cli/tests
+          (cd tools/uhid-bridge && pytest -q test_uhid_bridge.py)
+      - name: Build emulator
+        run: docker build -f emulator/Dockerfile -t esp32-passkey-emulator .
+      - name: End-to-end against emulator
+        run: |
+          docker run -d --name emu -p 35962:35962 esp32-passkey-emulator
+          for i in $(seq 1 30); do (echo > /dev/tcp/127.0.0.1/35962) 2>/dev/null && break; sleep 1; done
+          PASSKEY_DEVICE=tcp:127.0.0.1:35962 pytest -q tools/passkey-cli/tests/test_e2e_emulator.py
+      - if: always()
+        run: docker logs emu || true
+
+  serial-qemu:
+    # Real serial-transport firmware in Espressif QEMU, driven by passkey-cli.
+    needs: firmware
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [esp32, esp32c3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e "tools/passkey-cli[test]"
+      - uses: actions/download-artifact@v4
+        with:
+          name: passkey_${{ matrix.target }}
+          path: dist
+      - name: Start QEMU
+        run: |
+          docker run -d --name qemu -p 5555:5555 -v "$PWD:/src" espressif/idf:v5.5.4 \
+            bash -c "tr -d '\r' < /src/emulator/qemu-esp32.sh > /tmp/q.sh && QEMU_TARGET=${{ matrix.target }} bash /tmp/q.sh"
+          for i in $(seq 1 120); do docker exec qemu pgrep qemu-system && break; sleep 2; done
+          sleep 10
+      - name: End-to-end over serial
+        run: PASSKEY_DEVICE=socket://127.0.0.1:5555 pytest -q tools/passkey-cli/tests/test_e2e_emulator.py
+      - if: always()
+        run: docker logs qemu | tail -n 50 || true
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [firmware, cli-tests, serial-qemu]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Assemble web flasher
+        run: cp dist/*.bin web-flasher/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web-flasher
+      - uses: actions/deploy-pages@v4
+      - name: Attach binaries to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.bin --generate-notes

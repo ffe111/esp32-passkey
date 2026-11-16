@@ -1,0 +1,27 @@
+{
+  "name": "ESP32 Passkey",
+  "version": "0.1.0",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [{ "path": "passkey_esp32s3.bin", "offset": 0 }]
+    },
+    {
+      "chipFamily": "ESP32-S2",
+      "parts": [{ "path": "passkey_esp32s2.bin", "offset": 0 }]
+    },
+    {
+      "chipFamily": "ESP32",
+      "parts": [{ "path": "passkey_esp32.bin", "offset": 0 }]
+    },
+    {
+      "chipFamily": "ESP32-C3",
+      "parts": [{ "path": "passkey_esp32c3.bin", "offset": 0 }]
+    },
+    {
+      "chipFamily": "ESP32-C6",
+      "parts": [{ "path": "passkey_esp32c6.bin", "offset": 0 }]
+    }
+  ]
+}
