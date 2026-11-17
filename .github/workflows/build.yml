@@ -12,8 +12,10 @@ permissions:
 
 jobs:
   firmware:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
+      # One chip failing should not cancel the others (keeps every result visible).
+      fail-fast: false
       matrix:
         # s3/s2: native USB security key. esp32/c3/c6: serial transport (no USB OTG).
         target: [esp32s3, esp32s2, esp32, esp32c3, esp32c6]
@@ -46,7 +48,7 @@ jobs:
           path: dist/passkey_${{ matrix.target }}${{ matrix.variant }}.bin
 
   cli-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -65,7 +67,11 @@ jobs:
       - name: End-to-end against emulator
         run: |
           docker run -d --name emu -p 35962:35962 esp32-passkey-emulator
-          for i in $(seq 1 30); do (echo > /dev/tcp/127.0.0.1/35962) 2>/dev/null && break; sleep 1; done
+          # Don't probe the port: the emulator serves one client at a time, and a
+          # probe (`echo > /dev/tcp/...`) leaves it stuck on a stray byte from a
+          # closed connection, so every test then times out. Wait for its log line.
+          for i in $(seq 1 60); do docker logs emu 2>&1 | grep -q "HID server listening" && break; sleep 1; done
+          docker logs emu 2>&1 | grep "HID server listening"
           PASSKEY_DEVICE=tcp:127.0.0.1:35962 pytest -q tools/passkey-cli/tests/test_e2e_emulator.py
       - if: always()
         run: docker logs emu || true
@@ -73,8 +79,9 @@ jobs:
   serial-qemu:
     # Real serial-transport firmware in Espressif QEMU, driven by passkey-cli.
     needs: firmware
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false
       matrix:
         target: [esp32, esp32c3]
     steps:
@@ -101,7 +108,7 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [firmware, cli-tests, serial-qemu]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       pages: write
