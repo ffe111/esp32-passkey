@@ -9,7 +9,9 @@ param(
     # Serial targets only: keep ESP-IDF logs on UART0 (writes passkey_<target>_debug.bin).
     [switch]$SerialDebug,
     # Test-only: do not require a BOOT press (for QEMU, which has no button).
-    [switch]$NoButton
+    [switch]$NoButton,
+    # Experimental (esp32 only): also a Bluetooth LE FIDO authenticator (writes *_ble.bin).
+    [switch]$Ble
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -18,6 +20,7 @@ if ($UsbVid) { $envArgs += @('-e', "USB_VID=$UsbVid") }
 if ($UsbPid) { $envArgs += @('-e', "USB_PID=$UsbPid") }
 if ($SerialDebug) { $envArgs += @('-e', 'SERIAL_DEBUG=1') }
 if ($NoButton) { $envArgs += @('-e', 'REQUIRE_BUTTON=0') }
+if ($Ble) { $envArgs += @('-e', 'BLE=1') }
 
 docker run --rm `
     -v "${root}:/src" `
@@ -29,4 +32,5 @@ if ($LASTEXITCODE -ne 0) { throw "Firmware build failed ($LASTEXITCODE)" }
 $suffix = ''
 if ($NoButton) { $suffix += '_nobutton' }
 if ($SerialDebug) { $suffix += '_debug' }
+if ($Ble) { $suffix += '_ble' }
 Write-Host "Firmware: $root\dist\passkey_$Target$suffix.bin"

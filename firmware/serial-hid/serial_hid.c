@@ -23,6 +23,9 @@
 #ifdef PICOKEYS_TOUCH_PRESENCE
 #include "touch_presence.h"
 #endif
+#ifdef PICOKEYS_BLE
+#include "ble_fido.h"
+#endif
 
 static const char *TAG = "serial_hid";
 
@@ -80,6 +83,11 @@ bool tud_hid_n_report(uint8_t instance, uint8_t report_id, const void *report, u
     if (len > REPORT_SIZE) {
         return false;
     }
+#ifdef PICOKEYS_BLE
+    if (ble_fido_take_report(report, len)) {
+        return true; /* response for the Bluetooth channel */
+    }
+#endif
     uint8_t frame[4 + REPORT_SIZE] = { MAGIC0, MAGIC1, 0x00, REPORT_SIZE };
     memcpy(frame + 4, report, len);
     return uart_write_bytes(SERIAL_HID_UART, (const char *)frame, sizeof(frame)) == (int)sizeof(frame);
@@ -104,6 +112,9 @@ static void serial_hid_task(void *arg) {
 #endif
 
     while (1) {
+#ifdef PICOKEYS_BLE
+        ble_fido_poll(); /* Bluetooth requests enter the CTAP core on this task too */
+#endif
         int n = uart_read_bytes(SERIAL_HID_UART, chunk, sizeof(chunk), pdMS_TO_TICKS(10));
         TickType_t now = xTaskGetTickCount();
 #if CONFIG_LOG_DEFAULT_LEVEL >= 3
@@ -190,6 +201,9 @@ esp_err_t tinyusb_driver_install(const tinyusb_config_t *config) {
     }
 #ifdef PICOKEYS_TOUCH_PRESENCE
     touch_presence_init();
+#endif
+#ifdef PICOKEYS_BLE
+    ble_fido_init();
 #endif
     xTaskCreatePinnedToCore(serial_hid_task, "serial_hid", 8192, NULL, CONFIG_TINYUSB_TASK_PRIORITY, NULL, tskNO_AFFINITY);
     return ESP_OK;

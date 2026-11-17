@@ -69,6 +69,13 @@ if [[ "$MODE" == serial ]]; then
     SDKCONFIG_DEFAULTS+=";$OVERLAY/sdkconfig.serial-debug"
     SUFFIX+=_debug
   fi
+  # Experimental: also act as a Bluetooth LE FIDO authenticator (original ESP32).
+  if [[ "${BLE:-0}" == 1 ]]; then
+    if [[ "$TARGET" != esp32 ]]; then echo "BLE=1 is only wired up for esp32" >&2; exit 2; fi
+    EXTRA_DEFS+=("-DPICOKEYS_BLE=1")
+    SDKCONFIG_DEFAULTS+=";$OVERLAY/sdkconfig.ble"
+    SUFFIX+=_ble
+  fi
 fi
 
 idf.py "${EXTRA_DEFS[@]}" set-target "$TARGET"

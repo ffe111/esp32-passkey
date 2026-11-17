@@ -6,10 +6,12 @@ The upstream submodule is never modified. Every replacement must match exactly
 once; if upstream changes, this fails loudly instead of building something odd.
 
 Usage: apply_overlay.py <pico-fido copy dir> <serial-hid dir> <usb|serial>
+Set BLE=1 in the environment for the Bluetooth LE build (build.sh does this).
 """
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -62,6 +64,10 @@ def main(root: str, overlay: str, mode: str) -> None:
         f"        list(APPEND PICOKEYS_SOURCES {ov}/touch_presence.c)\n"
         "        add_compile_definitions(PICOKEYS_TOUCH_PRESENCE=1)\n"
         "    endif()\n"
+        "    if(PICOKEYS_BLE)\n"
+        f"        list(APPEND PICOKEYS_SOURCES {ov}/ble_fido.c)\n"
+        "        add_compile_definitions(PICOKEYS_BLE=1)\n"
+        "    endif()\n"
         "else()\n    list(APPEND PICOKEYS_SOURCES\n        ${CMAKE_CURRENT_LIST_DIR}/src/usb/usb_descriptors.c\n    )\nendif()",
     )
 
@@ -84,9 +90,13 @@ def main(root: str, overlay: str, mode: str) -> None:
         expect=2,
     )
 
-    # 1c. Device keys (otp_esp32_nvs.c) get their own NVS partition in the free gap
-    #     between the app (ends 0x120000) and part0 (0x200000). A merged .bin only
-    #     covers 0x1000..end of app, so firmware updates no longer wipe the keys.
+    # 1c. Device keys (otp_esp32_nvs.c) get their own NVS partition just below
+    #     part0 (0x200000). A merged .bin only covers 0x1000..end of app, so
+    #     firmware updates no longer wipe the keys. The app partition grows into
+    #     the rest of the gap (1M -> 0x1D0000) so the Bluetooth build fits.
+    patch(sdk / "config" / "esp32" / "partitions.csv",
+          "factory,  app,  factory,  0x20000, 1M\n",
+          "factory,  app,  factory,  0x20000, 0x1D0000\n")
     patch(sdk / "config" / "esp32" / "partitions.csv",
           "part0,    0x40, 0x1,     0x200000,  1M,\n",
           "pk_keys,  data, nvs,     0x1F0000,  0x6000\n"
@@ -97,9 +107,13 @@ def main(root: str, overlay: str, mode: str) -> None:
     patch(comp / "CMakeLists.txt",
           "    ${PICOKEYS_SDK_DIR}/src/led\n",
           f"    ${{PICOKEYS_SDK_DIR}}/src/led\n    {ov}/shim\n    {ov}\n")
+    # Only the Bluetooth build requires `bt`: even with Bluetooth disabled it
+    # drags in esp_wifi/wpa_supplicant, which clash with pico-keys-sdk's mbedTLS.
+    ble = os.environ.get("BLE") == "1"
     patch(comp / "CMakeLists.txt",
           "    esp_tinyusb\n",
-          "    esp_driver_uart\n    esp_driver_gpio\n    esp_driver_touch_sens\n    esp_timer\n    nvs_flash\n")
+          "    esp_driver_uart\n    esp_driver_gpio\n    esp_driver_touch_sens\n    esp_timer\n    nvs_flash\n"
+          + ("    bt\n" if ble else ""))
 
     # 2a. Touching the touch pad counts as pressing BOOT (PICOKEYS_TOUCH_PRESENCE).
     patch(sdk / "src" / "button.c",
@@ -140,6 +154,34 @@ def main(root: str, overlay: str, mode: str) -> None:
         patch(sdk / "src" / "led" / led_file,
               "defined(CONFIG_IDF_TARGET_ESP32C6)\n",
               "defined(CONFIG_IDF_TARGET_ESP32C6) || defined(CONFIG_IDF_TARGET_ESP32C3)\n")
+
+    # 3d. Bluetooth pulls in IDF components (wpa_supplicant via esp_wifi, NimBLE
+    #     crypto) that include IDF's mbedTLS config, which re-defines the
+    #     MBEDTLS_*_ALT macros pico-keys-sdk sets for the whole build. Those are
+    #     harmless "redefined" warnings, but IDF builds with -Werror.
+    #     Without Bluetooth some of these components are INTERFACE libraries,
+    #     which cannot take PRIVATE options, so only touch the BLE build.
+    patch(root_p / "CMakeLists.txt",
+          "if(ESP_PLATFORM)\n    project(pico_fido)\nendif()\n",
+          "if(ESP_PLATFORM)\n    project(pico_fido)\n"
+          "endif()\n"
+          "if(ESP_PLATFORM AND PICOKEYS_BLE)\n"
+          "    foreach(c wpa_supplicant esp_wifi esp_coex bt)\n"
+          "        if(TARGET __idf_${c})\n"
+          "            get_target_property(_type __idf_${c} TYPE)\n"
+          "            if(NOT _type STREQUAL \"INTERFACE_LIBRARY\")\n"
+          "                target_compile_options(__idf_${c} PRIVATE -Wno-error)\n"
+          "            endif()\n"
+          "        endif()\n"
+          "    endforeach()\n"
+          "    # wpa_supplicant also exports aes_encrypt/aes_decrypt; rename ours.\n"
+          "    foreach(c pico-keys-sdk fido)\n"
+          "        if(TARGET __idf_${c})\n"
+          "            target_compile_definitions(__idf_${c} PRIVATE\n"
+          "                aes_encrypt=picok_aes_encrypt aes_decrypt=picok_aes_decrypt)\n"
+          "        endif()\n"
+          "    endforeach()\n"
+          "endif()\n")
 
     # 4. The fido component also asked for esp_tinyusb.
     patch(root_p / "src" / "fido" / "CMakeLists.txt",
