@@ -16,6 +16,15 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/uart.h"
+#include "soc/uart_pins.h"
+#include "esp_log.h"
+#include "driver/gpio.h"
+#include "button.h"
+#ifdef PICOKEYS_TOUCH_PRESENCE
+#include "touch_presence.h"
+#endif
+
+static const char *TAG = "serial_hid";
 
 #include "tinyusb.h"
 #include "usb.h"
@@ -86,8 +95,38 @@ static void serial_hid_task(void *arg) {
     uint8_t rx_report[REPORT_SIZE];
     uint8_t chunk[128];
 
+    TickType_t last_byte = xTaskGetTickCount();
+#if CONFIG_LOG_DEFAULT_LEVEL >= 3
+    /* Debug builds: report the BOOT pin so button problems can be seen. */
+    TickType_t last_gpio_log = 0;
+    int last_level = -1;
+    gpio_dump_io_configuration(stdout, 1ULL << BOOT_PIN);
+#endif
+
     while (1) {
         int n = uart_read_bytes(SERIAL_HID_UART, chunk, sizeof(chunk), pdMS_TO_TICKS(10));
+        TickType_t now = xTaskGetTickCount();
+#if CONFIG_LOG_DEFAULT_LEVEL >= 3
+        int level = gpio_get_level(BOOT_PIN);
+        if (level != last_level || now - last_gpio_log > pdMS_TO_TICKS(2000)) {
+            ESP_LOGI(TAG, "BOOT pin GPIO%d level=%d", (int)BOOT_PIN, level);
+            if (level != last_level && last_level != -1) {
+                gpio_dump_io_configuration(stdout, 1ULL << BOOT_PIN);
+            }
+            last_level = level;
+            last_gpio_log = now;
+        }
+#endif
+        if (n <= 0) {
+            /* A frame is 68 bytes (~6 ms at 115200). If one stalls halfway, bytes
+             * were lost (e.g. FIFO overrun); drop it so the next frame can sync. */
+            if (state != RX_MAGIC0 && now - last_byte > pdMS_TO_TICKS(50)) {
+                ESP_LOGW(TAG, "dropped partial frame (%u/%u bytes)", (unsigned)got, (unsigned)REPORT_SIZE);
+                state = RX_MAGIC0;
+            }
+            continue;
+        }
+        last_byte = now;
         for (int i = 0; i < n; i++) {
             uint8_t b = chunk[i];
             switch (state) {
@@ -142,6 +181,16 @@ esp_err_t tinyusb_driver_install(const tinyusb_config_t *config) {
     if (err != ESP_OK) {
         return err;
     }
+    /* With CONFIG_ESP_CONSOLE_NONE nothing else routes UART0 to its pins, so on
+     * real silicon the port stays silent (QEMU ignores pin muxing). Route it here. */
+    err = uart_set_pin(SERIAL_HID_UART, U0TXD_GPIO_NUM, U0RXD_GPIO_NUM,
+                       UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    if (err != ESP_OK) {
+        return err;
+    }
+#ifdef PICOKEYS_TOUCH_PRESENCE
+    touch_presence_init();
+#endif
     xTaskCreatePinnedToCore(serial_hid_task, "serial_hid", 8192, NULL, CONFIG_TINYUSB_TASK_PRIORITY, NULL, tskNO_AFFINITY);
     return ESP_OK;
 }

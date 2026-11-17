@@ -36,18 +36,39 @@ EXTRA_DEFS=()
 if [[ -n "${USB_VID:-}" ]]; then EXTRA_DEFS+=("-DUSB_VID=${USB_VID}"); fi
 if [[ -n "${USB_PID:-}" ]]; then EXTRA_DEFS+=("-DUSB_PID=${USB_PID}"); fi
 
+# Upstream approves every request unless the board was commissioned with a button
+# timeout, so any program on the PC could use the key silently. Always require a
+# BOOT press (30 s timeout). REQUIRE_BUTTON=0 is only for QEMU tests (no button).
+SUFFIX=""
+if [[ "${REQUIRE_BUTTON:-1}" == 1 ]]; then
+  EXTRA_DEFS+=("-DFORCE_BUTTON_WAIT=1")
+else
+  SUFFIX="_nobutton"
+fi
+
+OVERLAY="/work/serial-hid"
+rm -rf "$OVERLAY"
+cp -a "$SRC_ROOT/firmware/serial-hid" "$OVERLAY"
+# Common fixes apply to every target; serial mode adds the UART transport.
+python3 "$OVERLAY/apply_overlay.py" "$WORK" "$OVERLAY" "$MODE"
+
 if [[ "$MODE" == serial ]]; then
-  OVERLAY="/work/serial-hid"
-  rm -rf "$OVERLAY"
-  cp -a "$SRC_ROOT/firmware/serial-hid" "$OVERLAY"
-  python3 "$OVERLAY/apply_overlay.py" "$WORK" "$OVERLAY"
   # OATH/OTP need CCID or keyboard HID, which a serial link cannot offer.
   EXTRA_DEFS+=("-DPICOKEYS_SERIAL_HID=1" "-DENABLE_OATH_APP=0" "-DENABLE_OTP_APP=0")
   # The original ESP32 has no eFuse key-purpose blocks; keep device keys in NVS.
-  if [[ "$TARGET" == esp32 ]]; then EXTRA_DEFS+=("-DPICOKEYS_OTP_NVS=1"); fi
+  # It also gets capacitive touch (T0 = GPIO4) as a second way to confirm presence,
+  # for boards whose BOOT button is unreliable.
+  if [[ "$TARGET" == esp32 ]]; then
+    EXTRA_DEFS+=("-DPICOKEYS_OTP_NVS=1")
+    if [[ "${REQUIRE_BUTTON:-1}" == 1 ]]; then EXTRA_DEFS+=("-DPICOKEYS_TOUCH_PRESENCE=1"); fi
+  fi
   # C3/C6 have no SHA-512 accelerator.
   if [[ "$TARGET" == esp32c3 || "$TARGET" == esp32c6 ]]; then EXTRA_DEFS+=("-DPICOKEYS_NO_HW_SHA512=1"); fi
   export SDKCONFIG_DEFAULTS="pico-keys-sdk/config/esp32/sdkconfig.defaults;$OVERLAY/sdkconfig.serial"
+  if [[ "${SERIAL_DEBUG:-0}" == 1 ]]; then
+    SDKCONFIG_DEFAULTS+=";$OVERLAY/sdkconfig.serial-debug"
+    SUFFIX+=_debug
+  fi
 fi
 
 idf.py "${EXTRA_DEFS[@]}" set-target "$TARGET"
@@ -56,5 +77,6 @@ idf.py "${EXTRA_DEFS[@]}" build
 CHIP_NAME="$(echo "$TARGET" | sed 's/esp32/ESP32-/; s/-$//' | tr '[:lower:]' '[:upper:]')"
 mkdir -p "$OUT_DIR"
 cd build
-python -m esptool --chip "$CHIP_NAME" merge_bin -o "$OUT_DIR/passkey_${TARGET}.bin" @flash_args
-echo "Built $OUT_DIR/passkey_${TARGET}.bin ($MODE transport)"
+OUT_BIN="$OUT_DIR/passkey_${TARGET}${SUFFIX}.bin"
+python -m esptool --chip "$CHIP_NAME" merge_bin -o "$OUT_BIN" @flash_args
+echo "Built $OUT_BIN ($MODE transport)"

@@ -5,13 +5,19 @@ param(
     [string]$Target = 'esp32s3',
     [string]$IdfImage = 'espressif/idf:v5.5.4',
     [string]$UsbVid = '',
-    [string]$UsbPid = ''
+    [string]$UsbPid = '',
+    # Serial targets only: keep ESP-IDF logs on UART0 (writes passkey_<target>_debug.bin).
+    [switch]$SerialDebug,
+    # Test-only: do not require a BOOT press (for QEMU, which has no button).
+    [switch]$NoButton
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $envArgs = @()
 if ($UsbVid) { $envArgs += @('-e', "USB_VID=$UsbVid") }
 if ($UsbPid) { $envArgs += @('-e', "USB_PID=$UsbPid") }
+if ($SerialDebug) { $envArgs += @('-e', 'SERIAL_DEBUG=1') }
+if ($NoButton) { $envArgs += @('-e', 'REQUIRE_BUTTON=0') }
 
 docker run --rm `
     -v "${root}:/src" `
@@ -20,4 +26,7 @@ docker run --rm `
     $IdfImage `
     bash -c "tr -d '\r' < /src/firmware/build.sh > /tmp/build.sh && bash /tmp/build.sh $Target /src/dist"
 if ($LASTEXITCODE -ne 0) { throw "Firmware build failed ($LASTEXITCODE)" }
-Write-Host "Firmware: $root\dist\passkey_$Target.bin"
+$suffix = ''
+if ($NoButton) { $suffix += '_nobutton' }
+if ($SerialDebug) { $suffix += '_debug' }
+Write-Host "Firmware: $root\dist\passkey_$Target$suffix.bin"

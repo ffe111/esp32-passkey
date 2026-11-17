@@ -7,7 +7,10 @@
 #       bash -c "tr -d '\r' < /src/emulator/qemu-esp32.sh > /tmp/q.sh && QEMU_TARGET=esp32 bash /tmp/q.sh"
 #   passkey-cli --device socket://127.0.0.1:5555 info
 #
-# QEMU does not model the BOOT button, so user presence behaves as if pressed.
+# QEMU has no BOOT button, so use the test-only image that skips the button check:
+#   firmware/build.ps1 -Target esp32 -NoButton   (or REQUIRE_BUTTON=0 build.sh esp32)
+#   FIRMWARE=/src/dist/passkey_esp32_nobutton.bin
+# A normal (button-required) image would deny every registration/sign-in here.
 set -euo pipefail
 TARGET="${QEMU_TARGET:-esp32}"
 FIRMWARE="${FIRMWARE:-/src/dist/passkey_${TARGET}.bin}"

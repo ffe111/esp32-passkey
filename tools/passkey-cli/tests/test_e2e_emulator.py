@@ -36,6 +36,13 @@ def _close_devices():
     close_all()
 
 
+def press_boot(capsys, times: int) -> None:
+    """Tell a person at a real board to press BOOT (pytest hides the CLI prompt)."""
+    with capsys.disabled():
+        print(f"\n    >>> Tap BOOT (or touch GPIO4 on an ESP32) {times}x: touch ~1 s then let go,"
+              f" each within 30 s <<<", flush=True)
+
+
 def run(capsys, *argv) -> tuple[int, str]:
     close_all()  # a serial port allows only one open connection
     code = main(["--device", DEVICE, *argv])
@@ -60,9 +67,13 @@ def test_02_set_pin(capsys):
 
 
 def test_03_selftest(capsys):
-    code, out = run(capsys, "--pin", PIN, "selftest")
-    assert code == 0, out
-    assert "Selftest OK" in out
+    # Show the CLI's own "Tap the button..." lines live: the second approval only
+    # counts once the device asks for it, so a person needs to see each prompt.
+    press_boot(capsys, 2)
+    close_all()
+    with capsys.disabled():
+        code = main(["--device", DEVICE, "--pin", PIN, "selftest"])
+    assert code == 0
 
 
 def test_04_discoverable_passkey_then_list_and_delete(capsys):
@@ -71,6 +82,7 @@ def test_04_discoverable_passkey_then_list_and_delete(capsys):
     cdh = hashlib.sha256(os.urandom(32)).digest()
     token = cp.get_pin_token(PIN, ClientPin.PERMISSION.MAKE_CREDENTIAL, RP["id"])
     user = {"id": b"user-0001", "name": "somchai", "displayName": "Somchai"}
+    press_boot(capsys, 1)
     att = ctap.make_credential(
         cdh, RP, user, [{"type": "public-key", "alg": -7}],
         options={"rk": True},

@@ -1,0 +1,6 @@
+# Diagnostic build (SERIAL_DEBUG=1): logs and panic output share UART0 with the
+# CTAPHID frames. passkey-cli skips anything before the F1 D0 frame magic.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+CONFIG_BOOTLOADER_LOG_LEVEL_INFO=y
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y

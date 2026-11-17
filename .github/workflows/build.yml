@@ -17,25 +17,33 @@ jobs:
       matrix:
         # s3/s2: native USB security key. esp32/c3/c6: serial transport (no USB OTG).
         target: [esp32s3, esp32s2, esp32, esp32c3, esp32c6]
+        variant: [""]
+        include:
+          # Test-only images for QEMU, which has no BOOT button. Never released.
+          - target: esp32
+            variant: _nobutton
+          - target: esp32c3
+            variant: _nobutton
     container: espressif/idf:v5.5.4
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
-      - name: Build ${{ matrix.target }}
+      - name: Build ${{ matrix.target }}${{ matrix.variant }}
         shell: bash
         env:
           # Set these repository variables once you own a VID/PID (https://pid.codes).
           USB_VID: ${{ vars.USB_VID }}
           USB_PID: ${{ vars.USB_PID }}
+          REQUIRE_BUTTON: ${{ matrix.variant == '_nobutton' && '0' || '1' }}
         run: |
           . $IDF_PATH/export.sh
           SRC_ROOT="$GITHUB_WORKSPACE" bash firmware/build.sh ${{ matrix.target }} "$GITHUB_WORKSPACE/dist"
       - uses: actions/upload-artifact@v4
         with:
-          name: passkey_${{ matrix.target }}
-          path: dist/passkey_${{ matrix.target }}.bin
+          name: passkey_${{ matrix.target }}${{ matrix.variant }}
+          path: dist/passkey_${{ matrix.target }}${{ matrix.variant }}.bin
 
   cli-tests:
     runs-on: ubuntu-latest
@@ -77,12 +85,12 @@ jobs:
       - run: pip install -e "tools/passkey-cli[test]"
       - uses: actions/download-artifact@v4
         with:
-          name: passkey_${{ matrix.target }}
+          name: passkey_${{ matrix.target }}_nobutton
           path: dist
       - name: Start QEMU
         run: |
           docker run -d --name qemu -p 5555:5555 -v "$PWD:/src" espressif/idf:v5.5.4 \
-            bash -c "tr -d '\r' < /src/emulator/qemu-esp32.sh > /tmp/q.sh && QEMU_TARGET=${{ matrix.target }} bash /tmp/q.sh"
+            bash -c "tr -d '\r' < /src/emulator/qemu-esp32.sh > /tmp/q.sh && QEMU_TARGET=${{ matrix.target }} FIRMWARE=/src/dist/passkey_${{ matrix.target }}_nobutton.bin bash /tmp/q.sh"
           for i in $(seq 1 120); do docker exec qemu pgrep qemu-system && break; sleep 2; done
           sleep 10
       - name: End-to-end over serial
@@ -104,6 +112,8 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Drop test-only images
+        run: rm -f dist/*_nobutton.bin
       - name: Assemble web flasher
         run: cp dist/*.bin web-flasher/
       - uses: actions/upload-pages-artifact@v3

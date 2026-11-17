@@ -19,6 +19,10 @@
 #include "picokeys.h"
 #include "otp_platform.h"
 
+/* A dedicated NVS partition outside the flashed image (see apply_overlay.py).
+ * The default "nvs" partition sits inside the 0x1000..app range of the merged
+ * .bin, so a firmware update would wipe the keys and orphan every passkey. */
+#define OTP_PART "pk_keys"
 #define OTP_NS "passkey_otp"
 #define OTP_KEY "keys"
 
@@ -42,16 +46,14 @@ bool otp_platform_is_secure_boot_locked(void) {
 }
 
 static bool load_or_create(void) {
-    esp_err_t err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        nvs_flash_erase();
-        err = nvs_flash_init();
-    }
+    esp_err_t err = nvs_flash_init_partition(OTP_PART);
     if (err != ESP_OK) {
+        /* Never erase and regenerate here: that would silently replace the
+         * device keys and make every stored passkey undecryptable. */
         return false;
     }
     nvs_handle_t h;
-    if (nvs_open(OTP_NS, NVS_READWRITE, &h) != ESP_OK) {
+    if (nvs_open_from_partition(OTP_PART, OTP_NS, NVS_READWRITE, &h) != ESP_OK) {
         return false;
     }
     size_t len = sizeof(otp_keys);

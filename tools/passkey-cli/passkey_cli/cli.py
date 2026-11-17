@@ -157,7 +157,7 @@ def cmd_selftest(args) -> int:
         pin_proto = cp.protocol
         pin_auth = pin_proto.authenticate(token, cdh)
 
-    print("Press the button on the device to approve registration...")
+    print("Tap the button on the device (press, then let go) to approve registration...")
     att = ctap.make_credential(cdh, rp, user, params, pin_uv_param=pin_auth,
                                pin_uv_protocol=pin_proto.VERSION if pin_proto else None)
     cred = att.auth_data.credential_data
@@ -167,7 +167,7 @@ def cmd_selftest(args) -> int:
     if pin_proto:
         token = cp.get_pin_token(_pin(args), ClientPin.PERMISSION.GET_ASSERTION, rp["id"])
         pin_auth = pin_proto.authenticate(token, cdh2)
-    print("Press the button again to approve sign-in...")
+    print("Tap the button again (press, then let go) to approve sign-in...")
     assertion = ctap.get_assertion(rp["id"], cdh2,
                                    [{"type": "public-key", "id": cred.credential_id}],
                                    pin_uv_param=pin_auth,

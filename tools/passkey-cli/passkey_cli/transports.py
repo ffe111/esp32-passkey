@@ -12,7 +12,9 @@ Every transport only moves raw 64-byte CTAPHID reports, so python-fido2's
 
 from __future__ import annotations
 
+import os
 import socket
+import sys
 import time
 from dataclasses import dataclass
 from typing import Callable, Protocol
@@ -24,6 +26,10 @@ REPORT_SIZE = 64
 SERIAL_MAGIC = b"\xF1\xD0"
 DEFAULT_TCP = ("127.0.0.1", 35962)
 SERIAL_BAUD = 115200
+# The firmware waits up to 30 s for BOOT and may send only a couple of keepalives
+# meanwhile, so the read timeout must comfortably exceed that.
+READ_TIMEOUT = 60
+_TRACE = os.environ.get("PASSKEY_TRACE") == "1"
 
 
 class TransportError(OSError):
@@ -60,16 +66,22 @@ class FramedConnection(CtapHidConnection):
     def _sync(self) -> None:
         """Skip boot logs or noise until the frame magic shows up."""
         matched = 0
-        skipped = 0
-        while matched < len(self.magic):
-            b = read_exact(self.stream, 1)
-            if b[0] == self.magic[matched]:
-                matched += 1
-            else:
-                matched = 1 if b[0] == self.magic[0] else 0
-                skipped += 1
-                if skipped > 4096:
-                    raise TransportError("no passkey frames on this port (wrong firmware?)")
+        skipped = bytearray()
+        try:
+            while matched < len(self.magic):
+                b = read_exact(self.stream, 1)
+                if b[0] == self.magic[matched]:
+                    matched += 1
+                else:
+                    matched = 1 if b[0] == self.magic[0] else 0
+                    skipped += b
+                    if len(skipped) > 4096:
+                        raise TransportError("no passkey frames on this port (wrong firmware?)")
+        finally:
+            if skipped and _TRACE:
+                # PASSKEY_TRACE=1: show firmware logs (debug builds) that share the UART.
+                sys.stderr.write(skipped.decode("utf-8", "replace"))
+                sys.stderr.flush()
 
     def read_packet(self) -> bytes:
         if self.magic:
@@ -109,7 +121,7 @@ def _open_serial(port: str, baud: int = SERIAL_BAUD, boot_wait: float = 1.5):
 
     if "://" in port:
         # pyserial URL, e.g. socket://127.0.0.1:5555 for a QEMU-emulated ESP32 UART.
-        ser = serial.serial_for_url(port, baudrate=baud, timeout=30)
+        ser = serial.serial_for_url(port, baudrate=baud, timeout=READ_TIMEOUT)
         time.sleep(boot_wait)
         ser.reset_input_buffer()
         return ser
@@ -117,7 +129,7 @@ def _open_serial(port: str, baud: int = SERIAL_BAUD, boot_wait: float = 1.5):
     ser = serial.Serial()
     ser.port = port
     ser.baudrate = baud
-    ser.timeout = 30  # CTAP waits for the button; keepalives arrive meanwhile
+    ser.timeout = READ_TIMEOUT
     # Keep DTR/RTS low so opening the port does not reset the board.
     ser.dtr = False
     ser.rts = False
@@ -190,19 +202,23 @@ def _open_device(spec: str | DeviceSpec,
         conn = FramedConnection(stream, SERIAL_MAGIC)
         # A serial line can still hold replies from an earlier session that was cut
         # off; python-fido2 then sees a foreign INIT nonce. Retry the handshake.
-        for attempt in range(3):
-            try:
-                return CtapHidDevice(desc, conn)
-            except ConnectionFailure:
-                if attempt == 2:
-                    raise
-                time.sleep(0.2)
-                _drain(stream)
+        try:
+            for attempt in range(3):
+                try:
+                    return CtapHidDevice(desc, conn)
+                except ConnectionFailure:
+                    if attempt == 2:
+                        raise
+                    time.sleep(0.2)
+                    _drain(stream)
+        except BaseException:
+            stream.close()  # otherwise the COM port stays locked for later opens
+            raise
 
     if spec.kind == "tcp":
         host, _, port = spec.target.rpartition(":") if spec.target else ("", "", "")
         addr = (host or DEFAULT_TCP[0], int(port) if port else DEFAULT_TCP[1])
-        sock = socket.create_connection(addr, timeout=30)
+        sock = socket.create_connection(addr, timeout=READ_TIMEOUT)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         desc = HidDescriptor(f"tcp:{addr[0]}:{addr[1]}", 0, 0, REPORT_SIZE, REPORT_SIZE, "Pico FIDO emulator", None)
         return CtapHidDevice(desc, FramedConnection(_SocketStream(sock)))
