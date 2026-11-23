@@ -2,7 +2,7 @@
 
 # ESP32 Passkey
 
-**Build and test an open-source FIDO2 / WebAuthn security key on an inexpensive ESP32 development board.**
+**Turn a $4 ESP32 board into an open-source FIDO2 / WebAuthn security key.**
 
 English | [ภาษาไทย](README.th.md)
 
@@ -20,8 +20,6 @@ English | [ภาษาไทย](README.th.md)
 
 </div>
 
-<!-- Maintainers: Update the English README first, then mirror the change in README.th.md. -->
-
 > [!WARNING]
 > **Alpha software — read before using on critical accounts.**
 > ESP32 chips do not have a hardware secure element like a commercial YubiKey. Anyone with physical access and flash-read capabilities could potentially extract stored keys. Read [docs/SECURITY.md](docs/SECURITY.md) before using this with high-value accounts.
@@ -30,7 +28,7 @@ English | [ภาษาไทย](README.th.md)
 
 ## Why ESP32 Passkey?
 
-Use an inexpensive ESP32 development board to learn how a hardware security key handles passkey registration and sign-in. No board yet? The project includes a software emulator for exploring the workflow.
+Commercial hardware security keys often cost $25–$70+. An ESP32 development board costs just a few dollars and is widely available everywhere.
 
 **ESP32 Passkey** turns an ESP32 into a working FIDO2 / WebAuthn passkey powered by [Pico FIDO](https://github.com/polhenarejos/pico-fido) as the CTAP2 core, wrapped with everything needed to build, flash, test, and manage it effortlessly:
 
